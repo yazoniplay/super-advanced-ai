@@ -139,17 +139,15 @@ async def analyze_with_gemini(title, body):
     }}
     """
 
-    # Use standard stable flash models with robust free-tier RPM handling
-    fallback_models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-3.6-flash']
-    base_delay = 3
+    fallback_models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+    base_delay = 5
 
     # Acquire semaphore lock so requests are cleanly queued one at a time
     async with ai_semaphore:
         for model_name in fallback_models:
             for attempt in range(1, 3):
                 try:
-                    # Built-in spacing between requests to stay safe under RPM limits
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(1.5)
                     
                     response = ai_client.models.generate_content(
                         model=model_name,
@@ -164,7 +162,7 @@ async def analyze_with_gemini(title, body):
                 except Exception as e:
                     error_str = str(e)
                     if "429" in error_str or "503" in error_str or "ResourceExhausted" in error_str:
-                        sleep_time = (base_delay ** attempt) + random.uniform(1, 2)
+                        sleep_time = (base_delay ** attempt) + random.uniform(1, 3)
                         logging.warning(f"⚠️ Rate limit hit on {model_name}. Backing off for {sleep_time:.1f}s...")
                         await asyncio.sleep(sleep_time)
                     else:
@@ -188,7 +186,6 @@ async def process_found_lead(session, platform, origin, title, permalink, author
     if not pitch.startswith("LEAD:"):
         pitch = f"LEAD: {pitch}"
 
-    # Log to local file automatically
     log_lead_to_history({
         "timestamp": datetime.utcnow().isoformat(),
         "platform": platform,
@@ -202,7 +199,6 @@ async def process_found_lead(session, platform, origin, title, permalink, author
         "pitch": pitch
     })
 
-    # Send Discord Alert
     if not DISCORD_WEBHOOK_URL:
         return
 
@@ -241,7 +237,6 @@ async def send_startup_notification(session):
     if not DISCORD_WEBHOOK_URL:
         return
 
-    # Skip heavy AI call on startup to prevent instant 429 rate limit blocks
     payload = {
         "username": "Web Dev & Skyfall Growth Engine Status",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
@@ -392,6 +387,9 @@ async def main():
     while True:
         async with aiohttp.ClientSession() as session:
             await send_startup_notification(session)
+            
+            # Stagger startup to prevent immediate request spikes
+            await asyncio.sleep(3)
 
             reddit_tasks = [fetch_reddit(session, sub) for sub in REDDIT_SUBREDDITS]
             lemmy_tasks = [fetch_lemmy(session, comm) for comm in LEMMY_COMMUNITIES]
