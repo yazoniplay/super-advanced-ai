@@ -62,9 +62,9 @@ def check_reddit_public():
 def check_tiktok_apify():
     print("🔍 Fetching TikTok business leads via Apify...")
     try:
-        # Reliable clockworks/free-tiktok-scraper parameters
+        # Fixed searchSection enum value: "/user"
         run_input = {
-            "searchSection": "users",
+            "searchSection": "/user",
             "searchKeywords": "small business web design",
             "maxItems": 3
         }
