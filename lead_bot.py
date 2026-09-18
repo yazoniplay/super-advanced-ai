@@ -7,7 +7,7 @@ APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-# Initialize Gemini Client
+# Initialize modern Gemini SDK and Apify
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 apify_client = ApifyClient(APIFY_TOKEN)
 
@@ -23,7 +23,7 @@ def send_discord_alert(platform, title, url, pitch):
         }]
     }
     res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-    print(f"--> Sent {platform} lead to Discord (Status: {res.status_code})")
+    print(f"--> Sent {platform} lead to Discord (Status Code: {res.status_code})")
 
 def check_reddit_public():
     print("🔍 Fetching Reddit posts...")
@@ -58,7 +58,7 @@ def check_reddit_public():
 def check_instagram_apify():
     print("🔍 Fetching Instagram profiles via Apify...")
     try:
-        # Fixed input schema for apidojo/instagram-user-scraper
+        # Fixed parameter key required by apidojo/instagram-user-scraper
         run_input = {
             "searchKeywords": ["local business"],
             "resultsLimit": 3
