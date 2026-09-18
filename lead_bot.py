@@ -114,35 +114,30 @@ async def analyze_with_gemini(title, body):
     }}
     """
 
-    # Valid current models preventing 404 errors
     fallback_models = ['gemini-3.6-flash', 'gemini-3.1-pro-preview']
 
     for model_name in fallback_models:
-        for attempt in range(3):
+        for attempt in range(4):
             try:
                 response = ai_client.models.generate_content(
                     model=model_name,
                     contents=prompt,
                     config={"automatic_function_calling": {"disable": True}}
                 )
-                cleaned = response.text.replace("```json", "").replace("```", "").strip()
-                data = json.loads(cleaned)
-                data["ai_failed"] = False
-                return data
+                if response and response.text:
+                    cleaned = response.text.replace("```json", "").replace("```", "").strip()
+                    data = json.loads(cleaned)
+                    data["ai_failed"] = False
+                    return data
             except Exception as e:
-                err_str = str(e)
-                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
-                    wait_time = (attempt + 1) * 2
-                    logging.warning(f"503/429 Error on {model_name} (Attempt {attempt + 1}/3). Retrying in {wait_time}s...")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logging.warning(f"Failed with model {model_name}: {e}")
-                    break
+                wait_time = (attempt + 1) * 3
+                logging.warning(f"Error on {model_name} (Attempt {attempt + 1}/4). Retrying in {wait_time}s...")
+                await asyncio.sleep(wait_time)
 
     return {
         "category": "CLIENT", 
         "score": 6, 
-        "estimated_value": "N/A (AI Gives Up)", 
+        "estimated_value": "N/A (AI Busy)", 
         "pitch": "LEAD: Saw your post! Check out my web dev portfolio here: https://yazoniplay.is-a.dev",
         "ai_failed": True
     }
@@ -163,7 +158,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
         header = f"💼 [PRIMARY CLIENT LEAD] • {platform}" if category == "CLIENT" else f"🎮 [SKYFALL SMP PLAYER] • {platform}"
 
     payload = {
-        "username": "Web Dev & Skyfall Growth Engine v7.0",
+        "username": "Web Dev & Skyfall Growth Engine v7.1",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
             "title": f"{header} ({origin})",
@@ -175,7 +170,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
                 {"name": "💰 Est. Value", "value": f"**{est_val}**", "inline": True},
                 {"name": "🚀 Custom Pitch", "value": f"```{pitch}```"},
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v7.0 • yazoniplay.is-a.dev"}
+            "footer": {"text": "Agency & SMP Growth Engine v7.1 • yazoniplay.is-a.dev"}
         }]
     }
 
@@ -194,6 +189,8 @@ async def send_startup_notification(session):
         "Need a modern portfolio website for my business", 
         "Looking for an experienced developer to create a clean site."
     )
+    
+    is_ai_healthy = not sample_analysis.get("ai_failed", False)
     sample_pitch = sample_analysis.get("pitch", "LEAD: Check out my work at https://yazoniplay.is-a.dev")
 
     payload = {
@@ -201,14 +198,14 @@ async def send_startup_notification(session):
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
             "title": "🟢 [GROWTH ENGINE CYCLE STARTED]",
-            "description": "10-minute automated loop cycle running. Scanning web & social platforms for fresh leads.",
-            "color": 0x2ECC71,
+            "description": "10-minute automated loop cycle running. Scanning platforms for fresh and recent leads.",
+            "color": 0x2ECC71 if is_ai_healthy else 0xE67E22,
             "fields": [
-                {"name": "🤖 AI Engine Status", "value": "Operational (Gemini 3.6 Flash Active)" if not sample_analysis.get("ai_failed") else "Running on Fallback Mode", "inline": True},
+                {"name": "🤖 AI Engine Status", "value": "Operational & Connected" if is_ai_healthy else "API Busy (Using Fallback Mode)", "inline": True},
                 {"name": "🔗 Portfolio Target", "value": "[yazoniplay.is-a.dev](https://yazoniplay.is-a.dev)", "inline": True},
                 {"name": "💬 Test AI Pitch Generation", "value": f"```{sample_pitch}```"}
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v7.0 • yazoniplay.is-a.dev"}
+            "footer": {"text": "Agency & SMP Growth Engine v7.1 • yazoniplay.is-a.dev"}
         }]
     }
 
@@ -221,8 +218,8 @@ async def send_startup_notification(session):
 
 # --- SCRAPERS ---
 async def fetch_reddit(session, sub):
-    url = f"https://www.reddit.com/r/{sub}/new.json?limit=15"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/7.0"}
+    url = f"https://www.reddit.com/r/{sub}/hot.json?limit=20"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/7.1"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -254,8 +251,8 @@ async def fetch_reddit(session, sub):
         logging.error(f"Error scraping Reddit r/{sub}: {e}")
 
 async def fetch_lemmy(session, community):
-    url = f"https://lemmy.world/api/v3/post/list?community_name={community.split('@')[0]}&limit=10"
-    headers = {"User-Agent": "ScaleEngine/7.0"}
+    url = f"https://lemmy.world/api/v3/post/list?community_name={community.split('@')[0]}&limit=15&sort=Active"
+    headers = {"User-Agent": "ScaleEngine/7.1"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -298,7 +295,7 @@ async def fetch_social_search(session, query):
                 platform = "Instagram" if "instagram" in query else ("Facebook" if "facebook" in query else "TikTok")
                 
                 raw_snippets = re.findall(r'class="result__snippet[^">]*">(.*?)</a>', html, re.DOTALL)
-                for snippet in raw_snippets[:3]:
+                for snippet in raw_snippets[:4]:
                     clean_text = re.sub(r'<[^>]+>', '', snippet).strip()
                     if not clean_text:
                         continue
@@ -355,10 +352,9 @@ async def fetch_youtube(session, query):
         logging.error(f"Error searching YouTube for {query}: {e}")
 
 async def main():
-    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v7.0...")
+    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v7.1...")
     while True:
         async with aiohttp.ClientSession() as session:
-            # Send status alert with test AI pitch on every cycle run
             await send_startup_notification(session)
 
             reddit_tasks = [fetch_reddit(session, sub) for sub in REDDIT_SUBREDDITS]
