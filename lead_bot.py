@@ -4,6 +4,7 @@ import aiohttp
 import json
 import logging
 import re
+from datetime import datetime
 from google import genai
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -21,6 +22,7 @@ CUSTOM_OFFER_INSTRUCTIONS = """
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 CACHE_FILE = "seen_leads.json"
+HISTORY_FILE = "lead_history.json"
 
 def load_seen_ids():
     if os.path.exists(CACHE_FILE):
@@ -38,6 +40,24 @@ def save_seen_ids(seen_set):
             json.dump(list(seen_set), f)
     except Exception as e:
         logging.error(f"Failed to save cache: {e}")
+
+def log_lead_to_history(lead_data):
+    try:
+        history = []
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, "r") as f:
+                history = json.load(f)
+        
+        history.insert(0, lead_data) # Add newest to the top
+        
+        # Keep only the last 100 leads to save space
+        if len(history) > 100:
+            history = history[:100]
+
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history, f, indent=4)
+    except Exception as e:
+        logging.error(f"Failed to save lead to history file: {e}")
 
 seen_ids = load_seen_ids()
 
@@ -142,13 +162,33 @@ async def analyze_with_gemini(title, body):
         "ai_failed": True
     }
 
-async def send_discord_alert(session, platform, origin, title, permalink, author, category, score, est_val, pitch, ai_failed=False):
-    if not DISCORD_WEBHOOK_URL:
-        logging.warning("Discord Webhook URL not set. Skipping alert.")
-        return
+async def process_found_lead(session, platform, origin, title, permalink, author, analysis):
+    category = analysis.get("category", "CLIENT")
+    score = analysis.get("score", 5)
+    est_val = analysis.get("estimated_value", "N/A")
+    pitch = analysis.get("pitch", "")
+    ai_failed = analysis.get("ai_failed", False)
 
     if not pitch.startswith("LEAD:"):
         pitch = f"LEAD: {pitch}"
+
+    # Log to local file automatically
+    log_lead_to_history({
+        "timestamp": datetime.utcnow().isoformat(),
+        "platform": platform,
+        "origin": origin,
+        "title": title,
+        "permalink": permalink,
+        "author": author,
+        "category": category,
+        "score": score,
+        "estimated_value": est_val,
+        "pitch": pitch
+    })
+
+    # Send Discord Alert
+    if not DISCORD_WEBHOOK_URL:
+        return
 
     if ai_failed:
         color = 0xE67E22
@@ -158,7 +198,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
         header = f"💼 [PRIMARY CLIENT LEAD] • {platform}" if category == "CLIENT" else f"🎮 [SKYFALL SMP PLAYER] • {platform}"
 
     payload = {
-        "username": "Web Dev & Skyfall Growth Engine v7.1",
+        "username": "Web Dev & Skyfall Growth Engine v7.2",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
             "title": f"{header} ({origin})",
@@ -170,7 +210,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
                 {"name": "💰 Est. Value", "value": f"**{est_val}**", "inline": True},
                 {"name": "🚀 Custom Pitch", "value": f"```{pitch}```"},
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v7.1 • yazoniplay.is-a.dev"}
+            "footer": {"text": "Agency & SMP Growth Engine v7.2 • Auto-Logged to lead_history.json"}
         }]
     }
 
@@ -197,15 +237,15 @@ async def send_startup_notification(session):
         "username": "Web Dev & Skyfall Growth Engine Status",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
-            "title": "🟢 [GROWTH ENGINE CYCLE STARTED]",
-            "description": "10-minute automated loop cycle running. Scanning platforms for fresh and recent leads.",
+            "title": "🟢 [GROWTH ENGINE CYCLE STARTED v7.2]",
+            "description": "10-minute automated loop running. Leads will be automatically logged and pushed to Discord.",
             "color": 0x2ECC71 if is_ai_healthy else 0xE67E22,
             "fields": [
                 {"name": "🤖 AI Engine Status", "value": "Operational & Connected" if is_ai_healthy else "API Busy (Using Fallback Mode)", "inline": True},
-                {"name": "🔗 Portfolio Target", "value": "[yazoniplay.is-a.dev](https://yazoniplay.is-a.dev)", "inline": True},
+                {"name": "📁 Local Auto-Logging", "value": "Enabled (`lead_history.json`)", "inline": True},
                 {"name": "💬 Test AI Pitch Generation", "value": f"```{sample_pitch}```"}
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v7.1 • yazoniplay.is-a.dev"}
+            "footer": {"text": "Agency & SMP Growth Engine v7.2 • yazoniplay.is-a.dev"}
         }]
     }
 
@@ -219,7 +259,7 @@ async def send_startup_notification(session):
 # --- SCRAPERS ---
 async def fetch_reddit(session, sub):
     url = f"https://www.reddit.com/r/{sub}/hot.json?limit=20"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/7.1"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/7.2"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -241,18 +281,15 @@ async def fetch_reddit(session, sub):
                             permalink = f"https://reddit.com{p_data.get('permalink')}"
                             analysis = await analyze_with_gemini(title, body)
                             if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
-                                await send_discord_alert(
-                                    session, "Reddit", f"r/{sub}", title, permalink, author,
-                                    analysis.get("category", "CLIENT"), analysis.get("score", 5),
-                                    analysis.get("estimated_value", "N/A"), analysis.get("pitch", ""),
-                                    ai_failed=analysis.get("ai_failed", False)
+                                await process_found_lead(
+                                    session, "Reddit", f"r/{sub}", title, permalink, author, analysis
                                 )
     except Exception as e:
         logging.error(f"Error scraping Reddit r/{sub}: {e}")
 
 async def fetch_lemmy(session, community):
     url = f"https://lemmy.world/api/v3/post/list?community_name={community.split('@')[0]}&limit=15&sort=Active"
-    headers = {"User-Agent": "ScaleEngine/7.1"}
+    headers = {"User-Agent": "ScaleEngine/7.2"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -275,11 +312,8 @@ async def fetch_lemmy(session, community):
                             permalink = post.get("ap_id", "")
                             analysis = await analyze_with_gemini(title, body)
                             if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
-                                await send_discord_alert(
-                                    session, "Lemmy", community, title, permalink, author,
-                                    analysis.get("category", "CLIENT"), analysis.get("score", 5),
-                                    analysis.get("estimated_value", "N/A"), analysis.get("pitch", ""),
-                                    ai_failed=analysis.get("ai_failed", False)
+                                await process_found_lead(
+                                    session, "Lemmy", community, title, permalink, author, analysis
                                 )
     except Exception as e:
         logging.error(f"Error scraping Lemmy {community}: {e}")
@@ -307,13 +341,10 @@ async def fetch_social_search(session, query):
                             seen_ids.add(post_id)
                             analysis = await analyze_with_gemini(clean_text, "")
                             if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
-                                await send_discord_alert(
+                                await process_found_lead(
                                     session, platform, "Social Index", clean_text[:80] + "...", 
                                     f"https://www.google.com/search?q={query.replace(' ', '+')}", 
-                                    f"{platform} User", analysis.get("category", "CLIENT"), 
-                                    analysis.get("score", 5), analysis.get("estimated_value", "N/A"), 
-                                    analysis.get("pitch", ""),
-                                    ai_failed=analysis.get("ai_failed", False)
+                                    f"{platform} User", analysis
                                 )
     except Exception as e:
         logging.error(f"Error searching {query}: {e}")
@@ -340,19 +371,16 @@ async def fetch_youtube(session, query):
                             seen_ids.add(post_id)
                             analysis = await analyze_with_gemini(clean_text, "YouTube Content")
                             if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
-                                await send_discord_alert(
+                                await process_found_lead(
                                     session, "YouTube", "Search Index", clean_text[:80] + "...",
                                     f"https://www.youtube.com/results?search_query={query.replace('site:youtube.com ', '').replace(' ', '+')}",
-                                    "YouTube Creator/Viewer", analysis.get("category", "CLIENT"),
-                                    analysis.get("score", 5), analysis.get("estimated_value", "N/A"),
-                                    analysis.get("pitch", ""),
-                                    ai_failed=analysis.get("ai_failed", False)
+                                    "YouTube Creator", analysis
                                 )
     except Exception as e:
         logging.error(f"Error searching YouTube for {query}: {e}")
 
 async def main():
-    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v7.1...")
+    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v7.2...")
     while True:
         async with aiohttp.ClientSession() as session:
             await send_startup_notification(session)
