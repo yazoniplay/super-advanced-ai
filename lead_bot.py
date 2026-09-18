@@ -114,7 +114,8 @@ async def analyze_with_gemini(title, body):
     }}
     """
 
-    fallback_models = ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-2.5-pro']
+    # Valid current models preventing 404 errors
+    fallback_models = ['gemini-3.6-flash', 'gemini-3.1-pro-preview']
 
     for model_name in fallback_models:
         for attempt in range(3):
@@ -162,7 +163,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
         header = f"💼 [PRIMARY CLIENT LEAD] • {platform}" if category == "CLIENT" else f"🎮 [SKYFALL SMP PLAYER] • {platform}"
 
     payload = {
-        "username": "Web Dev & Skyfall Growth Engine v6.11",
+        "username": "Web Dev & Skyfall Growth Engine v7.0",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
             "title": f"{header} ({origin})",
@@ -174,7 +175,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
                 {"name": "💰 Est. Value", "value": f"**{est_val}**", "inline": True},
                 {"name": "🚀 Custom Pitch", "value": f"```{pitch}```"},
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v6.11 • yazoniplay.is-a.dev"}
+            "footer": {"text": "Agency & SMP Growth Engine v7.0 • yazoniplay.is-a.dev"}
         }]
     }
 
@@ -189,7 +190,6 @@ async def send_startup_notification(session):
     if not DISCORD_WEBHOOK_URL:
         return
 
-    # Generate a sample startup AI pitch to confirm generation pipeline is operational
     sample_analysis = await analyze_with_gemini(
         "Need a modern portfolio website for my business", 
         "Looking for an experienced developer to create a clean site."
@@ -200,15 +200,15 @@ async def send_startup_notification(session):
         "username": "Web Dev & Skyfall Growth Engine Status",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
-            "title": "🟢 [GROWTH ENGINE ONLINE & RESTARTED]",
-            "description": "The bot action has successfully restarted, connected to APIs, and is now actively scanning for leads.",
+            "title": "🟢 [GROWTH ENGINE CYCLE STARTED]",
+            "description": "10-minute automated loop cycle running. Scanning web & social platforms for fresh leads.",
             "color": 0x2ECC71,
             "fields": [
-                {"name": "🤖 AI Engine Status", "value": "Operational (Multi-model fallback ready)" if not sample_analysis.get("ai_failed") else "Running on Fallback Mode", "inline": True},
+                {"name": "🤖 AI Engine Status", "value": "Operational (Gemini 3.6 Flash Active)" if not sample_analysis.get("ai_failed") else "Running on Fallback Mode", "inline": True},
                 {"name": "🔗 Portfolio Target", "value": "[yazoniplay.is-a.dev](https://yazoniplay.is-a.dev)", "inline": True},
                 {"name": "💬 Test AI Pitch Generation", "value": f"```{sample_pitch}```"}
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v6.11 • yazoniplay.is-a.dev"}
+            "footer": {"text": "Agency & SMP Growth Engine v7.0 • yazoniplay.is-a.dev"}
         }]
     }
 
@@ -219,10 +219,10 @@ async def send_startup_notification(session):
     except Exception as e:
         logging.error(f"Discord Startup Webhook Error: {e}")
 
-# --- SCRAPER 1: REDDIT ---
+# --- SCRAPERS ---
 async def fetch_reddit(session, sub):
     url = f"https://www.reddit.com/r/{sub}/new.json?limit=15"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/6.11"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/7.0"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -253,10 +253,9 @@ async def fetch_reddit(session, sub):
     except Exception as e:
         logging.error(f"Error scraping Reddit r/{sub}: {e}")
 
-# --- SCRAPER 2: LEMMY ---
 async def fetch_lemmy(session, community):
     url = f"https://lemmy.world/api/v3/post/list?community_name={community.split('@')[0]}&limit=10"
-    headers = {"User-Agent": "ScaleEngine/6.11"}
+    headers = {"User-Agent": "ScaleEngine/7.0"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -288,7 +287,6 @@ async def fetch_lemmy(session, community):
     except Exception as e:
         logging.error(f"Error scraping Lemmy {community}: {e}")
 
-# --- SCRAPER 3: INSTAGRAM / FACEBOOK / TIKTOK ---
 async def fetch_social_search(session, query):
     url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -323,7 +321,6 @@ async def fetch_social_search(session, query):
     except Exception as e:
         logging.error(f"Error searching {query}: {e}")
 
-# --- SCRAPER 4: YOUTUBE ---
 async def fetch_youtube(session, query):
     url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -358,19 +355,23 @@ async def fetch_youtube(session, query):
         logging.error(f"Error searching YouTube for {query}: {e}")
 
 async def main():
-    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v6.11...")
-    async with aiohttp.ClientSession() as session:
-        # Send restart/startup notification with a test AI pitch
-        await send_startup_notification(session)
+    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v7.0...")
+    while True:
+        async with aiohttp.ClientSession() as session:
+            # Send status alert with test AI pitch on every cycle run
+            await send_startup_notification(session)
 
-        reddit_tasks = [fetch_reddit(session, sub) for sub in REDDIT_SUBREDDITS]
-        lemmy_tasks = [fetch_lemmy(session, comm) for comm in LEMMY_COMMUNITIES]
-        social_tasks = [fetch_social_search(session, q) for q in SOCIAL_SEARCH_QUERIES]
-        youtube_tasks = [fetch_youtube(session, yq) for yq in YOUTUBE_SEARCH_QUERIES]
+            reddit_tasks = [fetch_reddit(session, sub) for sub in REDDIT_SUBREDDITS]
+            lemmy_tasks = [fetch_lemmy(session, comm) for comm in LEMMY_COMMUNITIES]
+            social_tasks = [fetch_social_search(session, q) for q in SOCIAL_SEARCH_QUERIES]
+            youtube_tasks = [fetch_youtube(session, yq) for yq in YOUTUBE_SEARCH_QUERIES]
+            
+            await asyncio.gather(*reddit_tasks, *lemmy_tasks, *social_tasks, *youtube_tasks)
         
-        await asyncio.gather(*reddit_tasks, *lemmy_tasks, *social_tasks, *youtube_tasks)
-    
-    save_seen_ids(seen_ids)
+        save_seen_ids(seen_ids)
+        
+        logging.info("⏳ Cycle complete. Waiting 10 minutes before next scan...")
+        await asyncio.sleep(600)
 
 if __name__ == "__main__":
     asyncio.run(main())
