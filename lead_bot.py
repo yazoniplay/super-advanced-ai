@@ -49,7 +49,7 @@ def check_reddit():
                             
                             prompt = f"Draft a short, compelling 2-sentence pitch offering custom web design to this Reddit post: '{title}'"
                             response = ai_client.models.generate_content(
-                                model='gemini-2.5-flash',
+                                model='gemini-3.6-flash',
                                 contents=prompt
                             )
                             send_discord_alert("Reddit", title, permalink, response.text)
@@ -74,7 +74,7 @@ def check_google_news():
                         seen_ids.add(link)
                         prompt = f"Draft a 2-sentence cold pitch offering web development services based on this title: '{title}'"
                         response = ai_client.models.generate_content(
-                            model='gemini-2.5-flash',
+                            model='gemini-3.6-flash',
                             contents=prompt
                         )
                         send_discord_alert("Google News", title, link, response.text)
@@ -100,7 +100,7 @@ def check_hacker_news():
                             hn_url = f"https://news.ycombinator.com/item?id={s_id}"
                             prompt = f"Write a professional 2-sentence pitch offering web engineering for this HN thread: '{title}'"
                             response = ai_client.models.generate_content(
-                                model='gemini-2.5-flash',
+                                model='gemini-3.6-flash',
                                 contents=prompt
                             )
                             send_discord_alert("HackerNews", title, hn_url, response.text)
