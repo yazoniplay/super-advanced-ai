@@ -126,7 +126,7 @@ async def analyze_with_gemini(title, body):
 
     Tasks:
     1. Score high intent (1-10). (10 = ready to hire or join RIGHT NOW).
-    2. Estimate value range: e.g., "$150 - $600" for web clients, "Active Player" for players.
+    2. Estimate value range: e.g., "$150 - "$600" for web clients, "Active Player" for players.
     3. Generate a killer 2-sentence pitch tailored directly to their post.
     IMPORTANT: You MUST start the pitch with the exact text "LEAD: ".
 
@@ -139,7 +139,8 @@ async def analyze_with_gemini(title, body):
     }}
     """
 
-    fallback_models = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']
+    # Correct active model endpoints
+    fallback_models = ['gemini-3.6-flash', 'gemini-3.6-flash-lite', 'gemini-3.1-pro']
     base_delay = 5
 
     # Acquire semaphore lock so requests are cleanly queued one at a time
