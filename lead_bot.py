@@ -112,22 +112,34 @@ async def analyze_with_gemini(title, body):
         "pitch": "LEAD: Hey! I build fast, tailored websites that drive real growth. Take a look at my portfolio at https://yazoniplay.is-a.dev — open to a quick chat?"
     }}
     """
-    try:
-        response = ai_client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=prompt,
-            config={"automatic_function_calling": {"disable": True}}
-        )
-        cleaned = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(cleaned)
-    except Exception as e:
-        logging.warning(f"Gemini API Error: {e}")
-        return {
-            "category": "CLIENT", 
-            "score": 5, 
-            "estimated_value": "N/A", 
-            "pitch": "LEAD: Saw your post! Check out my web dev portfolio here: https://yazoniplay.is-a.dev"
-        }
+
+    models_to_try = ['gemini-2.5-flash', 'gemini-1.5-flash']
+
+    for model_name in models_to_try:
+        for attempt in range(3):
+            try:
+                response = ai_client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config={"automatic_function_calling": {"disable": True}}
+                )
+                cleaned = response.text.replace("```json", "").replace("```", "").strip()
+                return json.loads(cleaned)
+            except Exception as e:
+                err_str = str(e)
+                if "503" in err_str or "UNAVAILABLE" in err_str:
+                    logging.warning(f"503 High Demand on {model_name} (Attempt {attempt + 1}/3). Retrying in 2s...")
+                    await asyncio.sleep(2)
+                else:
+                    logging.warning(f"Gemini API Error ({model_name}): {e}")
+                    break
+
+    return {
+        "category": "CLIENT", 
+        "score": 5, 
+        "estimated_value": "N/A", 
+        "pitch": "LEAD: Saw your post! Check out my web dev portfolio here: https://yazoniplay.is-a.dev"
+    }
 
 async def send_discord_alert(session, platform, origin, title, permalink, author, category, score, est_val, pitch):
     if not DISCORD_WEBHOOK_URL:
@@ -141,7 +153,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
     header = f"💼 [PRIMARY CLIENT LEAD] • {platform}" if category == "CLIENT" else f"🎮 [SKYFALL SMP PLAYER] • {platform}"
 
     payload = {
-        "username": "Web Dev & Skyfall Growth Engine v6.5",
+        "username": "Web Dev & Skyfall Growth Engine v6.6",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
             "title": f"{header} ({origin})",
@@ -153,7 +165,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
                 {"name": "💰 Est. Value", "value": f"**{est_val}**", "inline": True},
                 {"name": "🚀 Custom AI Pitch", "value": f"```{pitch}```"},
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v6.5 • yazoniplay.is-a.dev"}
+            "footer": {"text": "Agency & SMP Growth Engine v6.6 • yazoniplay.is-a.dev"}
         }]
     }
 
@@ -167,7 +179,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
 # --- SCRAPER 1: REDDIT ---
 async def fetch_reddit(session, sub):
     url = f"https://www.reddit.com/r/{sub}/new.json?limit=15"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/6.5"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/6.6"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -200,7 +212,7 @@ async def fetch_reddit(session, sub):
 # --- SCRAPER 2: LEMMY ---
 async def fetch_lemmy(session, community):
     url = f"https://lemmy.world/api/v3/post/list?community_name={community.split('@')[0]}&limit=10"
-    headers = {"User-Agent": "ScaleEngine/6.5"}
+    headers = {"User-Agent": "ScaleEngine/6.6"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -299,7 +311,7 @@ async def fetch_youtube(session, query):
         logging.error(f"Error searching YouTube for {query}: {e}")
 
 async def main():
-    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v6.5...")
+    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v6.6...")
     async with aiohttp.ClientSession() as session:
         reddit_tasks = [fetch_reddit(session, sub) for sub in REDDIT_SUBREDDITS]
         lemmy_tasks = [fetch_lemmy(session, comm) for comm in LEMMY_COMMUNITIES]
