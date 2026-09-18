@@ -7,7 +7,6 @@ APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-# Initialize modern Gemini SDK and Apify
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 apify_client = ApifyClient(APIFY_TOKEN)
 
@@ -58,9 +57,10 @@ def check_reddit_public():
 def check_instagram_apify():
     print("🔍 Fetching Instagram profiles via Apify...")
     try:
-        # Fixed parameter key required by apidojo/instagram-user-scraper
+        # Corrected input parameters for apidojo/instagram-user-scraper
         run_input = {
-            "searchKeywords": ["local business"],
+            "search": ["local business"],
+            "searchType": "user",
             "resultsLimit": 3
         }
         run = apify_client.actor("apidojo/instagram-user-scraper").call(run_input=run_input)
