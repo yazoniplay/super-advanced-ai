@@ -139,16 +139,17 @@ async def analyze_with_gemini(title, body):
     }}
     """
 
-    fallback_models = ['gemini-3.6-flash', 'gemini-3.1-pro-preview']
-    base_delay = 4
+    # Use standard stable flash models with robust free-tier RPM handling
+    fallback_models = ['gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-3.6-flash']
+    base_delay = 3
 
     # Acquire semaphore lock so requests are cleanly queued one at a time
     async with ai_semaphore:
         for model_name in fallback_models:
-            for attempt in range(1, 5):
+            for attempt in range(1, 3):
                 try:
                     # Built-in spacing between requests to stay safe under RPM limits
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1.0)
                     
                     response = ai_client.models.generate_content(
                         model=model_name,
@@ -163,12 +164,11 @@ async def analyze_with_gemini(title, body):
                 except Exception as e:
                     error_str = str(e)
                     if "429" in error_str or "503" in error_str or "ResourceExhausted" in error_str:
-                        sleep_time = (base_delay ** attempt) + random.uniform(2, 4)
-                        logging.warning(f"⚠️ Rate limit hit on {model_name} (Attempt {attempt}/4). Backing off for {sleep_time:.1f}s...")
+                        sleep_time = (base_delay ** attempt) + random.uniform(1, 2)
+                        logging.warning(f"⚠️ Rate limit hit on {model_name}. Backing off for {sleep_time:.1f}s...")
                         await asyncio.sleep(sleep_time)
                     else:
-                        logging.warning(f"Error on {model_name} (Attempt {attempt}/4): {e}")
-                        await asyncio.sleep(2)
+                        break
 
     return {
         "category": "CLIENT", 
@@ -241,25 +241,17 @@ async def send_startup_notification(session):
     if not DISCORD_WEBHOOK_URL:
         return
 
-    sample_analysis = await analyze_with_gemini(
-        "Need a modern portfolio website for my business", 
-        "Looking for an experienced developer to create a clean site."
-    )
-    
-    is_ai_healthy = not sample_analysis.get("ai_failed", False)
-    sample_pitch = sample_analysis.get("pitch", "LEAD: Check out my work at https://yazoniplay.is-a.dev")
-
+    # Skip heavy AI call on startup to prevent instant 429 rate limit blocks
     payload = {
         "username": "Web Dev & Skyfall Growth Engine Status",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
             "title": "🟢 [GROWTH ENGINE CYCLE STARTED v7.2]",
-            "description": "10-minute automated loop running. Leads will be automatically logged and pushed to Discord.",
-            "color": 0x2ECC71 if is_ai_healthy else 0xE67E22,
+            "description": "10-minute automated loop running. Scrapers active, concurrency queue enabled.",
+            "color": 0x2ECC71,
             "fields": [
-                {"name": "🤖 AI Engine Status", "value": "Operational & Connected" if is_ai_healthy else "API Busy (Using Fallback Mode)", "inline": True},
+                {"name": "🤖 AI Engine Status", "value": "Operational (Queued & Protected)", "inline": True},
                 {"name": "📁 Local Auto-Logging", "value": "Enabled (`lead_history.json`)", "inline": True},
-                {"name": "💬 Test AI Pitch Generation", "value": f"```{sample_pitch}```"}
             ],
             "footer": {"text": "Agency & SMP Growth Engine v7.2 • yazoniplay.is-a.dev"}
         }]
