@@ -126,7 +126,7 @@ async def analyze_with_gemini(title, body):
 
     Tasks:
     1. Score high intent (1-10). (10 = ready to hire or join RIGHT NOW).
-    2. Estimate value range: e.g., "$150 - "$600" for web clients, "Active Player" for players.
+    2. Estimate value range: e.g., "$150 - $600" for web clients, "Active Player" for players.
     3. Generate a killer 2-sentence pitch tailored directly to their post.
     IMPORTANT: You MUST start the pitch with the exact text "LEAD: ".
 
@@ -139,16 +139,17 @@ async def analyze_with_gemini(title, body):
     }}
     """
 
-    # Correct active model endpoints
-    fallback_models = ['gemini-3.6-flash', 'gemini-3.6-flash-lite', 'gemini-3.1-pro']
-    base_delay = 5
+    # Strictly prioritizing Flash Lite first, with longer enforced pacing
+    fallback_models = ['gemini-3.6-flash-lite', 'gemini-3.6-flash', 'gemini-3.1-pro']
+    base_delay = 6
 
     # Acquire semaphore lock so requests are cleanly queued one at a time
     async with ai_semaphore:
         for model_name in fallback_models:
             for attempt in range(1, 3):
                 try:
-                    await asyncio.sleep(1.5)
+                    # Increased base sleep between calls to prevent 429 floods
+                    await asyncio.sleep(2.5)
                     
                     response = ai_client.models.generate_content(
                         model=model_name,
@@ -163,7 +164,7 @@ async def analyze_with_gemini(title, body):
                 except Exception as e:
                     error_str = str(e)
                     if "429" in error_str or "503" in error_str or "ResourceExhausted" in error_str:
-                        sleep_time = (base_delay ** attempt) + random.uniform(1, 3)
+                        sleep_time = (base_delay ** attempt) + random.uniform(2, 4)
                         logging.warning(f"⚠️ Rate limit hit on {model_name}. Backing off for {sleep_time:.1f}s...")
                         await asyncio.sleep(sleep_time)
                     else:
