@@ -1,6 +1,6 @@
 import os
 import requests
-from apify_client import ApifyClient
+import xml.etree.ElementTree as ET
 from google import genai
 
 APIFY_TOKEN = os.getenv("APIFY_TOKEN")
@@ -8,8 +8,6 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
-apify_client = ApifyClient(APIFY_TOKEN)
-
 seen_ids = set()
 
 def send_discord_alert(platform, title, url, pitch):
@@ -27,11 +25,10 @@ def send_discord_alert(platform, title, url, pitch):
     except Exception as e:
         print(f"Error sending Discord webhook: {e}")
 
-def check_reddit_public():
-    print("🔍 Searching Reddit feeds...")
+def check_reddit():
+    print("🔍 Searching Reddit...")
     subreddits = ["smallbusiness", "Entrepreneur", "webdesign", "freelance", "Startups"]
     keywords = ["need a website", "looking for web designer", "website redesign"]
-    
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) LeadHunter/1.0"}
     
     for sub in subreddits:
@@ -45,7 +42,7 @@ def check_reddit_public():
                         data = post.get("data", {})
                         post_id = data.get("id")
                         
-                        if post_id not in seen_ids:
+                        if post_id and post_id not in seen_ids:
                             seen_ids.add(post_id)
                             title = data.get("title")
                             permalink = f"https://reddit.com{data.get('permalink')}"
@@ -59,35 +56,59 @@ def check_reddit_public():
             except Exception as e:
                 print(f"Reddit error on r/{sub}: {e}")
 
-def check_tiktok_apify():
-    print("🔍 Fetching TikTok business leads via Apify...")
+def check_google_news():
+    print("🔍 Searching Google News RSS...")
+    queries = ["looking+for+web+designer", "small+business+needs+website"]
+    
+    for query in queries:
+        url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+        try:
+            res = requests.get(url)
+            if res.status_code == 200:
+                root = ET.fromstring(res.content)
+                for item in root.findall('./channel/item')[:2]:
+                    title = item.find('title').text
+                    link = item.find('link').text
+                    
+                    if link not in seen_ids:
+                        seen_ids.add(link)
+                        prompt = f"Draft a 2-sentence cold pitch offering web development services based on this title: '{title}'"
+                        response = ai_client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=prompt
+                        )
+                        send_discord_alert("Google News", title, link, response.text)
+        except Exception as e:
+            print(f"Google News error: {e}")
+
+def check_hacker_news():
+    print("🔍 Searching Hacker News Freelance threads...")
     try:
-        # Fixed searchSection enum value: "/user"
-        run_input = {
-            "searchSection": "/user",
-            "searchKeywords": "small business web design",
-            "maxItems": 3
-        }
-        run = apify_client.actor("clockworks/free-tiktok-scraper").call(run_input=run_input)
-        
-        for item in apify_client.dataset(run["defaultDatasetId"]).iterate_items():
-            author_info = item.get("author", {})
-            unique_id = author_info.get("uniqueId") or item.get("uniqueId")
-            
-            if unique_id and unique_id not in seen_ids:
-                seen_ids.add(unique_id)
-                profile_url = f"https://www.tiktok.com/@{unique_id}"
-                
-                prompt = f"Write a punchy 2-sentence DM pitch to TikTok user @{unique_id} offering a modern website build."
-                response = ai_client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=prompt
-                )
-                send_discord_alert("TikTok", f"@{unique_id}", profile_url, response.text)
+        url = "https://hacker-news.firebaseio.com/v0/topstories.json"
+        res = requests.get(url)
+        if res.status_code == 200:
+            story_ids = res.json()[:15]
+            for s_id in story_ids:
+                item_res = requests.get(f"https://hacker-news.firebaseio.com/v0/item/{s_id}.json")
+                if item_res.status_code == 200:
+                    data = item_res.json()
+                    title = data.get("title", "")
+                    
+                    if "Ask HN:" in title or "Seeking" in title:
+                        if s_id not in seen_ids:
+                            seen_ids.add(s_id)
+                            hn_url = f"https://news.ycombinator.com/item?id={s_id}"
+                            prompt = f"Write a professional 2-sentence pitch offering web engineering for this HN thread: '{title}'"
+                            response = ai_client.models.generate_content(
+                                model='gemini-2.5-flash',
+                                contents=prompt
+                            )
+                            send_discord_alert("HackerNews", title, hn_url, response.text)
     except Exception as e:
-        print(f"Apify TikTok Error: {e}")
+        print(f"HN error: {e}")
 
 if __name__ == "__main__":
     print("🚀 Running Lead Hunter Engine...")
-    check_reddit_public()
-    check_tiktok_apify()
+    check_reddit()
+    check_google_news()
+    check_hacker_news()
