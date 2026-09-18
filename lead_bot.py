@@ -4,6 +4,8 @@ import aiohttp
 import json
 import logging
 import re
+import random
+import time
 from datetime import datetime
 from google import genai
 
@@ -135,9 +137,10 @@ async def analyze_with_gemini(title, body):
     """
 
     fallback_models = ['gemini-3.6-flash', 'gemini-3.1-pro-preview']
+    base_delay = 3
 
     for model_name in fallback_models:
-        for attempt in range(4):
+        for attempt in range(1, 5):
             try:
                 response = ai_client.models.generate_content(
                     model=model_name,
@@ -150,9 +153,15 @@ async def analyze_with_gemini(title, body):
                     data["ai_failed"] = False
                     return data
             except Exception as e:
-                wait_time = (attempt + 1) * 3
-                logging.warning(f"Error on {model_name} (Attempt {attempt + 1}/4). Retrying in {wait_time}s...")
-                await asyncio.sleep(wait_time)
+                error_str = str(e)
+                # Check for rate limits or server capacity drops
+                if "429" in error_str or "503" in error_str or "ResourceExhausted" in error_str:
+                    sleep_time = (base_delay ** attempt) + random.uniform(1, 3)
+                    logging.warning(f"⚠️ Rate limit/glitch hit on {model_name} (Attempt {attempt}/4). Retrying in {sleep_time:.1f}s...")
+                    await asyncio.sleep(sleep_time)
+                else:
+                    logging.warning(f"Error on {model_name} (Attempt {attempt}/4): {e}")
+                    await asyncio.sleep(2)
 
     return {
         "category": "CLIENT", 
