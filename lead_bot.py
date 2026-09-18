@@ -78,9 +78,10 @@ async def analyze_with_gemini(title, body):
     if not ai_client:
         return {
             "category": "CLIENT", 
-            "score": 5, 
-            "estimated_value": "N/A", 
-            "pitch": "LEAD: Saw your post! I build fast, custom websites—check out my work at https://yazoniplay.is-a.dev!"
+            "score": 6, 
+            "estimated_value": "N/A (AI Offline)", 
+            "pitch": "LEAD: Saw your post! I build fast, custom websites—check out my work at https://yazoniplay.is-a.dev!",
+            "ai_failed": True
         }
 
     prompt = f"""
@@ -113,7 +114,6 @@ async def analyze_with_gemini(title, body):
     }}
     """
 
-    # Primary model with fallback candidates if 503/429 errors persist
     fallback_models = ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-2.5-pro']
 
     for model_name in fallback_models:
@@ -125,7 +125,9 @@ async def analyze_with_gemini(title, body):
                     config={"automatic_function_calling": {"disable": True}}
                 )
                 cleaned = response.text.replace("```json", "").replace("```", "").strip()
-                return json.loads(cleaned)
+                data = json.loads(cleaned)
+                data["ai_failed"] = False
+                return data
             except Exception as e:
                 err_str = str(e)
                 if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
@@ -134,16 +136,17 @@ async def analyze_with_gemini(title, body):
                     await asyncio.sleep(wait_time)
                 else:
                     logging.warning(f"Failed with model {model_name}: {e}")
-                    break  # Skip to next model if non-retriable error occurs
+                    break
 
     return {
         "category": "CLIENT", 
-        "score": 5, 
-        "estimated_value": "N/A", 
-        "pitch": "LEAD: Saw your post! Check out my web dev portfolio here: https://yazoniplay.is-a.dev"
+        "score": 6, 
+        "estimated_value": "N/A (AI Gives Up)", 
+        "pitch": "LEAD: Saw your post! Check out my web dev portfolio here: https://yazoniplay.is-a.dev",
+        "ai_failed": True
     }
 
-async def send_discord_alert(session, platform, origin, title, permalink, author, category, score, est_val, pitch):
+async def send_discord_alert(session, platform, origin, title, permalink, author, category, score, est_val, pitch, ai_failed=False):
     if not DISCORD_WEBHOOK_URL:
         logging.warning("Discord Webhook URL not set. Skipping alert.")
         return
@@ -151,11 +154,15 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
     if not pitch.startswith("LEAD:"):
         pitch = f"LEAD: {pitch}"
 
-    color = 0x9B59B6 if category == "CLIENT" else (0x2ECC71 if score >= 8 else 0xF1C40F)
-    header = f"💼 [PRIMARY CLIENT LEAD] • {platform}" if category == "CLIENT" else f"🎮 [SKYFALL SMP PLAYER] • {platform}"
+    if ai_failed:
+        color = 0xE67E22
+        header = f"⚠️ [GEMINI OFFLINE / FALLBACK LEAD] • {platform}"
+    else:
+        color = 0x9B59B6 if category == "CLIENT" else (0x2ECC71 if score >= 8 else 0xF1C40F)
+        header = f"💼 [PRIMARY CLIENT LEAD] • {platform}" if category == "CLIENT" else f"🎮 [SKYFALL SMP PLAYER] • {platform}"
 
     payload = {
-        "username": "Web Dev & Skyfall Growth Engine v6.8",
+        "username": "Web Dev & Skyfall Growth Engine v6.11",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
             "title": f"{header} ({origin})",
@@ -165,9 +172,9 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
             "fields": [
                 {"name": "🎯 Intent Score", "value": f"**{score}/10**", "inline": True},
                 {"name": "💰 Est. Value", "value": f"**{est_val}**", "inline": True},
-                {"name": "🚀 Custom AI Pitch", "value": f"```{pitch}```"},
+                {"name": "🚀 Custom Pitch", "value": f"```{pitch}```"},
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v6.8 • yazoniplay.is-a.dev"}
+            "footer": {"text": "Agency & SMP Growth Engine v6.11 • yazoniplay.is-a.dev"}
         }]
     }
 
@@ -178,10 +185,44 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
     except Exception as e:
         logging.error(f"Discord Webhook Error: {e}")
 
+async def send_startup_notification(session):
+    if not DISCORD_WEBHOOK_URL:
+        return
+
+    # Generate a sample startup AI pitch to confirm generation pipeline is operational
+    sample_analysis = await analyze_with_gemini(
+        "Need a modern portfolio website for my business", 
+        "Looking for an experienced developer to create a clean site."
+    )
+    sample_pitch = sample_analysis.get("pitch", "LEAD: Check out my work at https://yazoniplay.is-a.dev")
+
+    payload = {
+        "username": "Web Dev & Skyfall Growth Engine Status",
+        "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
+        "embeds": [{
+            "title": "🟢 [GROWTH ENGINE ONLINE & RESTARTED]",
+            "description": "The bot action has successfully restarted, connected to APIs, and is now actively scanning for leads.",
+            "color": 0x2ECC71,
+            "fields": [
+                {"name": "🤖 AI Engine Status", "value": "Operational (Multi-model fallback ready)" if not sample_analysis.get("ai_failed") else "Running on Fallback Mode", "inline": True},
+                {"name": "🔗 Portfolio Target", "value": "[yazoniplay.is-a.dev](https://yazoniplay.is-a.dev)", "inline": True},
+                {"name": "💬 Test AI Pitch Generation", "value": f"```{sample_pitch}```"}
+            ],
+            "footer": {"text": "Agency & SMP Growth Engine v6.11 • yazoniplay.is-a.dev"}
+        }]
+    }
+
+    try:
+        async with session.post(DISCORD_WEBHOOK_URL, json=payload) as resp:
+            if resp.status not in (200, 204):
+                logging.error(f"Discord Startup Webhook status: {resp.status}")
+    except Exception as e:
+        logging.error(f"Discord Startup Webhook Error: {e}")
+
 # --- SCRAPER 1: REDDIT ---
 async def fetch_reddit(session, sub):
     url = f"https://www.reddit.com/r/{sub}/new.json?limit=15"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/6.8"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/6.11"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -202,11 +243,12 @@ async def fetch_reddit(session, sub):
                             seen_ids.add(post_id)
                             permalink = f"https://reddit.com{p_data.get('permalink')}"
                             analysis = await analyze_with_gemini(title, body)
-                            if analysis.get("score", 5) >= 6:
+                            if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
                                 await send_discord_alert(
                                     session, "Reddit", f"r/{sub}", title, permalink, author,
                                     analysis.get("category", "CLIENT"), analysis.get("score", 5),
-                                    analysis.get("estimated_value", "N/A"), analysis.get("pitch", "")
+                                    analysis.get("estimated_value", "N/A"), analysis.get("pitch", ""),
+                                    ai_failed=analysis.get("ai_failed", False)
                                 )
     except Exception as e:
         logging.error(f"Error scraping Reddit r/{sub}: {e}")
@@ -214,7 +256,7 @@ async def fetch_reddit(session, sub):
 # --- SCRAPER 2: LEMMY ---
 async def fetch_lemmy(session, community):
     url = f"https://lemmy.world/api/v3/post/list?community_name={community.split('@')[0]}&limit=10"
-    headers = {"User-Agent": "ScaleEngine/6.8"}
+    headers = {"User-Agent": "ScaleEngine/6.11"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -236,11 +278,12 @@ async def fetch_lemmy(session, community):
                             seen_ids.add(post_id)
                             permalink = post.get("ap_id", "")
                             analysis = await analyze_with_gemini(title, body)
-                            if analysis.get("score", 5) >= 6:
+                            if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
                                 await send_discord_alert(
                                     session, "Lemmy", community, title, permalink, author,
                                     analysis.get("category", "CLIENT"), analysis.get("score", 5),
-                                    analysis.get("estimated_value", "N/A"), analysis.get("pitch", "")
+                                    analysis.get("estimated_value", "N/A"), analysis.get("pitch", ""),
+                                    ai_failed=analysis.get("ai_failed", False)
                                 )
     except Exception as e:
         logging.error(f"Error scraping Lemmy {community}: {e}")
@@ -268,13 +311,14 @@ async def fetch_social_search(session, query):
                         if post_id not in seen_ids:
                             seen_ids.add(post_id)
                             analysis = await analyze_with_gemini(clean_text, "")
-                            if analysis.get("score", 5) >= 6:
+                            if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
                                 await send_discord_alert(
                                     session, platform, "Social Index", clean_text[:80] + "...", 
                                     f"https://www.google.com/search?q={query.replace(' ', '+')}", 
                                     f"{platform} User", analysis.get("category", "CLIENT"), 
                                     analysis.get("score", 5), analysis.get("estimated_value", "N/A"), 
-                                    analysis.get("pitch", "")
+                                    analysis.get("pitch", ""),
+                                    ai_failed=analysis.get("ai_failed", False)
                                 )
     except Exception as e:
         logging.error(f"Error searching {query}: {e}")
@@ -301,20 +345,24 @@ async def fetch_youtube(session, query):
                         if post_id not in seen_ids:
                             seen_ids.add(post_id)
                             analysis = await analyze_with_gemini(clean_text, "YouTube Content")
-                            if analysis.get("score", 5) >= 6:
+                            if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
                                 await send_discord_alert(
                                     session, "YouTube", "Search Index", clean_text[:80] + "...",
                                     f"https://www.youtube.com/results?search_query={query.replace('site:youtube.com ', '').replace(' ', '+')}",
                                     "YouTube Creator/Viewer", analysis.get("category", "CLIENT"),
                                     analysis.get("score", 5), analysis.get("estimated_value", "N/A"),
-                                    analysis.get("pitch", "")
+                                    analysis.get("pitch", ""),
+                                    ai_failed=analysis.get("ai_failed", False)
                                 )
     except Exception as e:
         logging.error(f"Error searching YouTube for {query}: {e}")
 
 async def main():
-    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v6.8...")
+    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v6.11...")
     async with aiohttp.ClientSession() as session:
+        # Send restart/startup notification with a test AI pitch
+        await send_startup_notification(session)
+
         reddit_tasks = [fetch_reddit(session, sub) for sub in REDDIT_SUBREDDITS]
         lemmy_tasks = [fetch_lemmy(session, comm) for comm in LEMMY_COMMUNITIES]
         social_tasks = [fetch_social_search(session, q) for q in SOCIAL_SEARCH_QUERIES]
