@@ -139,16 +139,14 @@ async def analyze_with_gemini(title, body):
     }}
     """
 
-    # Strictly prioritizing Flash Lite first, with longer enforced pacing
-    fallback_models = ['gemini-3.6-flash-lite', 'gemini-3.6-flash', 'gemini-3.1-pro']
+    # Using the correct 3.5-flash-lite model ID first
+    fallback_models = ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.1-pro']
     base_delay = 6
 
-    # Acquire semaphore lock so requests are cleanly queued one at a time
     async with ai_semaphore:
         for model_name in fallback_models:
             for attempt in range(1, 3):
                 try:
-                    # Increased base sleep between calls to prevent 429 floods
                     await asyncio.sleep(2.5)
                     
                     response = ai_client.models.generate_content(
@@ -247,7 +245,7 @@ async def send_startup_notification(session):
             "description": "10-minute automated loop running. Scrapers active, concurrency queue enabled.",
             "color": 0x2ECC71,
             "fields": [
-                {"name": "🤖 AI Engine Status", "value": "Operational (Queued & Protected)", "inline": True},
+                {"name": "🤖 AI Engine Status", "value": "Operational (Flash-Lite Queued)", "inline": True},
                 {"name": "📁 Local Auto-Logging", "value": "Enabled (`lead_history.json`)", "inline": True},
             ],
             "footer": {"text": "Agency & SMP Growth Engine v7.2 • yazoniplay.is-a.dev"}
@@ -261,7 +259,6 @@ async def send_startup_notification(session):
     except Exception as e:
         logging.error(f"Discord Startup Webhook Error: {e}")
 
-# --- SCRAPERS ---
 async def fetch_reddit(session, sub):
     url = f"https://www.reddit.com/r/{sub}/hot.json?limit=20"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/7.2"}
@@ -390,7 +387,6 @@ async def main():
         async with aiohttp.ClientSession() as session:
             await send_startup_notification(session)
             
-            # Stagger startup to prevent immediate request spikes
             await asyncio.sleep(3)
 
             reddit_tasks = [fetch_reddit(session, sub) for sub in REDDIT_SUBREDDITS]
