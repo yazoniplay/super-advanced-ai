@@ -114,8 +114,9 @@ async def analyze_with_gemini(title, body):
     """
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt
+            model='gemini-3.6-flash',
+            contents=prompt,
+            config={"automatic_function_calling": {"disable": True}}
         )
         cleaned = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(cleaned)
@@ -140,7 +141,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
     header = f"💼 [PRIMARY CLIENT LEAD] • {platform}" if category == "CLIENT" else f"🎮 [SKYFALL SMP PLAYER] • {platform}"
 
     payload = {
-        "username": "Web Dev & Skyfall Growth Engine v6.4",
+        "username": "Web Dev & Skyfall Growth Engine v6.5",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
             "title": f"{header} ({origin})",
@@ -152,7 +153,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
                 {"name": "💰 Est. Value", "value": f"**{est_val}**", "inline": True},
                 {"name": "🚀 Custom AI Pitch", "value": f"```{pitch}```"},
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v6.4 • yazoniplay.is-a.dev"}
+            "footer": {"text": "Agency & SMP Growth Engine v6.5 • yazoniplay.is-a.dev"}
         }]
     }
 
@@ -166,7 +167,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
 # --- SCRAPER 1: REDDIT ---
 async def fetch_reddit(session, sub):
     url = f"https://www.reddit.com/r/{sub}/new.json?limit=15"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/6.4"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/6.5"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -199,7 +200,7 @@ async def fetch_reddit(session, sub):
 # --- SCRAPER 2: LEMMY ---
 async def fetch_lemmy(session, community):
     url = f"https://lemmy.world/api/v3/post/list?community_name={community.split('@')[0]}&limit=10"
-    headers = {"User-Agent": "ScaleEngine/6.4"}
+    headers = {"User-Agent": "ScaleEngine/6.5"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -298,7 +299,7 @@ async def fetch_youtube(session, query):
         logging.error(f"Error searching YouTube for {query}: {e}")
 
 async def main():
-    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v6.4...")
+    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v6.5...")
     async with aiohttp.ClientSession() as session:
         reddit_tasks = [fetch_reddit(session, sub) for sub in REDDIT_SUBREDDITS]
         lemmy_tasks = [fetch_lemmy(session, comm) for comm in LEMMY_COMMUNITIES]
