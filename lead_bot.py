@@ -113,27 +113,28 @@ async def analyze_with_gemini(title, body):
     }}
     """
 
-    # Retries using the supported gemini-3.6-flash model with exponential backoff
-    target_model = 'gemini-3.6-flash'
-    
-    for attempt in range(4):
-        try:
-            response = ai_client.models.generate_content(
-                model=target_model,
-                contents=prompt,
-                config={"automatic_function_calling": {"disable": True}}
-            )
-            cleaned = response.text.replace("```json", "").replace("```", "").strip()
-            return json.loads(cleaned)
-        except Exception as e:
-            err_str = str(e)
-            if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
-                wait_time = (attempt + 1) * 3
-                logging.warning(f"High Demand / Rate Limit on {target_model} (Attempt {attempt + 1}/4). Retrying in {wait_time}s...")
-                await asyncio.sleep(wait_time)
-            else:
-                logging.warning(f"Gemini API Error ({target_model}): {e}")
-                break
+    # Primary model with fallback candidates if 503/429 errors persist
+    fallback_models = ['gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-2.5-pro']
+
+    for model_name in fallback_models:
+        for attempt in range(3):
+            try:
+                response = ai_client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config={"automatic_function_calling": {"disable": True}}
+                )
+                cleaned = response.text.replace("```json", "").replace("```", "").strip()
+                return json.loads(cleaned)
+            except Exception as e:
+                err_str = str(e)
+                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
+                    wait_time = (attempt + 1) * 2
+                    logging.warning(f"503/429 Error on {model_name} (Attempt {attempt + 1}/3). Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logging.warning(f"Failed with model {model_name}: {e}")
+                    break  # Skip to next model if non-retriable error occurs
 
     return {
         "category": "CLIENT", 
@@ -154,7 +155,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
     header = f"💼 [PRIMARY CLIENT LEAD] • {platform}" if category == "CLIENT" else f"🎮 [SKYFALL SMP PLAYER] • {platform}"
 
     payload = {
-        "username": "Web Dev & Skyfall Growth Engine v6.7",
+        "username": "Web Dev & Skyfall Growth Engine v6.8",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
             "title": f"{header} ({origin})",
@@ -166,7 +167,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
                 {"name": "💰 Est. Value", "value": f"**{est_val}**", "inline": True},
                 {"name": "🚀 Custom AI Pitch", "value": f"```{pitch}```"},
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v6.7 • yazoniplay.is-a.dev"}
+            "footer": {"text": "Agency & SMP Growth Engine v6.8 • yazoniplay.is-a.dev"}
         }]
     }
 
@@ -180,7 +181,7 @@ async def send_discord_alert(session, platform, origin, title, permalink, author
 # --- SCRAPER 1: REDDIT ---
 async def fetch_reddit(session, sub):
     url = f"https://www.reddit.com/r/{sub}/new.json?limit=15"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/6.7"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/6.8"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -213,7 +214,7 @@ async def fetch_reddit(session, sub):
 # --- SCRAPER 2: LEMMY ---
 async def fetch_lemmy(session, community):
     url = f"https://lemmy.world/api/v3/post/list?community_name={community.split('@')[0]}&limit=10"
-    headers = {"User-Agent": "ScaleEngine/6.7"}
+    headers = {"User-Agent": "ScaleEngine/6.8"}
 
     try:
         async with session.get(url, headers=headers) as resp:
@@ -312,7 +313,7 @@ async def fetch_youtube(session, query):
         logging.error(f"Error searching YouTube for {query}: {e}")
 
 async def main():
-    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v6.7...")
+    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v6.8...")
     async with aiohttp.ClientSession() as session:
         reddit_tasks = [fetch_reddit(session, sub) for sub in REDDIT_SUBREDDITS]
         lemmy_tasks = [fetch_lemmy(session, comm) for comm in LEMMY_COMMUNITIES]
