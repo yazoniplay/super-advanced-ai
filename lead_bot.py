@@ -23,6 +23,9 @@ CUSTOM_OFFER_INSTRUCTIONS = """
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
+# Concurrency lock to prevent parallel spamming of Gemini API and tripping 429 limits
+ai_semaphore = asyncio.Semaphore(1)
+
 CACHE_FILE = "seen_leads.json"
 HISTORY_FILE = "lead_history.json"
 
@@ -137,31 +140,35 @@ async def analyze_with_gemini(title, body):
     """
 
     fallback_models = ['gemini-3.6-flash', 'gemini-3.1-pro-preview']
-    base_delay = 3
+    base_delay = 4
 
-    for model_name in fallback_models:
-        for attempt in range(1, 5):
-            try:
-                response = ai_client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config={"automatic_function_calling": {"disable": True}}
-                )
-                if response and response.text:
-                    cleaned = response.text.replace("```json", "").replace("```", "").strip()
-                    data = json.loads(cleaned)
-                    data["ai_failed"] = False
-                    return data
-            except Exception as e:
-                error_str = str(e)
-                # Check for rate limits or server capacity drops
-                if "429" in error_str or "503" in error_str or "ResourceExhausted" in error_str:
-                    sleep_time = (base_delay ** attempt) + random.uniform(1, 3)
-                    logging.warning(f"⚠️ Rate limit/glitch hit on {model_name} (Attempt {attempt}/4). Retrying in {sleep_time:.1f}s...")
-                    await asyncio.sleep(sleep_time)
-                else:
-                    logging.warning(f"Error on {model_name} (Attempt {attempt}/4): {e}")
-                    await asyncio.sleep(2)
+    # Acquire semaphore lock so requests are cleanly queued one at a time
+    async with ai_semaphore:
+        for model_name in fallback_models:
+            for attempt in range(1, 5):
+                try:
+                    # Built-in spacing between requests to stay safe under RPM limits
+                    await asyncio.sleep(1.5)
+                    
+                    response = ai_client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config={"automatic_function_calling": {"disable": True}}
+                    )
+                    if response and response.text:
+                        cleaned = response.text.replace("```json", "").replace("```", "").strip()
+                        data = json.loads(cleaned)
+                        data["ai_failed"] = False
+                        return data
+                except Exception as e:
+                    error_str = str(e)
+                    if "429" in error_str or "503" in error_str or "ResourceExhausted" in error_str:
+                        sleep_time = (base_delay ** attempt) + random.uniform(2, 4)
+                        logging.warning(f"⚠️ Rate limit hit on {model_name} (Attempt {attempt}/4). Backing off for {sleep_time:.1f}s...")
+                        await asyncio.sleep(sleep_time)
+                    else:
+                        logging.warning(f"Error on {model_name} (Attempt {attempt}/4): {e}")
+                        await asyncio.sleep(2)
 
     return {
         "category": "CLIENT", 
