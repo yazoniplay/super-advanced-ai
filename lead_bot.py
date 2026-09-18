@@ -1,39 +1,75 @@
 import os
 import requests
-import xml.etree.ElementTree as ET
+import time
 from google import genai
 
-APIFY_TOKEN = os.getenv("APIFY_TOKEN")
+# Load secrets from GitHub Actions environment
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
+# Initialize Gemini Client
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 seen_ids = set()
 
-def send_discord_alert(platform, title, url, pitch):
+def send_discord_alert(sub_name, title, url, pitch):
+    """Fires structured lead cards straight to your Discord channel"""
     payload = {
         "embeds": [{
-            "title": f"🚨 NEW LEAD [{platform}]: {title}",
+            "title": f"💰 HIGH-INTENT LEAD [r/{sub_name}]: {title}",
             "url": url,
-            "color": 5814783,
-            "fields": [{"name": "AI Pitch", "value": pitch}]
+            "color": 3066993, # Emerald Green for money/leads
+            "fields": [
+                {"name": "🎯 Recommended Cold DM Pitch", "value": pitch}
+            ],
+            "footer": {"text": "Lead Hunter Engine • High Intent Filter Active"}
         }]
     }
     try:
         res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-        print(f"--> Sent {platform} lead to Discord (Status: {res.status_code})")
+        print(f"--> [SUCCESS] Sent lead from r/{sub_name} to Discord (Status: {res.status_code})")
     except Exception as e:
         print(f"Error sending Discord webhook: {e}")
 
-def check_reddit():
-    print("🔍 Searching Reddit...")
-    subreddits = ["smallbusiness", "Entrepreneur", "webdesign", "freelance", "Startups"]
-    keywords = ["need a website", "looking for web designer", "website redesign"]
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) LeadHunter/1.0"}
+def generate_pitch_with_retry(prompt, retries=3, delay=2):
+    """Generates custom cold pitches with auto-retry if Gemini hits traffic spikes"""
+    for attempt in range(retries):
+        try:
+            response = ai_client.models.generate_content(
+                model='gemini-3.6-flash',
+                contents=prompt
+            )
+            return response.text
+        except Exception as e:
+            if "503" in str(e) and attempt < retries - 1:
+                print(f"⚠️ Gemini busy (503). Retrying in {delay}s...")
+                time.sleep(delay)
+                delay *= 2
+            else:
+                raise e
+
+def hunt_clients():
+    print("🚀 Hunting for active client requests...")
     
-    for sub in subreddits:
-        for query in keywords:
-            url = f"https://www.reddit.com/r/{sub}/search.json?q={query}&sort=new&limit=2"
+    # Subreddits dedicated to hiring or business owners seeking help
+    target_subs = ["forhire", "freelance_forhire", "smallbusiness", "Entrepreneur", "webdesign"]
+    
+    # Precise query strings for client hiring intent
+    intent_queries = [
+        '"[Hiring]"', 
+        '"looking for web designer"', 
+        '"need a website"', 
+        '"need a developer"', 
+        '"redesign my website"'
+    ]
+    
+    # Filters out blog posts, self-promotion, and tutorials
+    negative_keywords = ["best ai", "top 10", "how to", "tutorial", "review", "[for hire]", "showcase"]
+    
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) LeadHunter/2.0"}
+
+    for sub in target_subs:
+        for query in intent_queries:
+            url = f"https://www.reddit.com/r/{sub}/search.json?q={query}&sort=new&restrict_sr=on&limit=4"
             try:
                 res = requests.get(url, headers=headers)
                 if res.status_code == 200:
@@ -41,74 +77,27 @@ def check_reddit():
                     for post in posts:
                         data = post.get("data", {})
                         post_id = data.get("id")
-                        
+                        title = data.get("title", "")
+                        title_lower = title.lower()
+
+                        # Skip self-promotions or general articles
+                        if any(neg in title_lower for neg in negative_keywords):
+                            continue
+
                         if post_id and post_id not in seen_ids:
                             seen_ids.add(post_id)
-                            title = data.get("title")
                             permalink = f"https://reddit.com{data.get('permalink')}"
                             
-                            prompt = f"Draft a short, compelling 2-sentence pitch offering custom web design to this Reddit post: '{title}'"
-                            response = ai_client.models.generate_content(
-                                model='gemini-3.6-flash',
-                                contents=prompt
+                            prompt = (
+                                f"Act as an expert freelance web developer. Write a highly persuasive, "
+                                f"2-sentence cold message/DM to a prospective client who made this post: '{title}'. "
+                                f"Focus on solving their problem, adding value, and inviting a call or portfolio check."
                             )
-                            send_discord_alert("Reddit", title, permalink, response.text)
+                            
+                            pitch = generate_pitch_with_retry(prompt)
+                            send_discord_alert(sub, title, permalink, pitch)
             except Exception as e:
-                print(f"Reddit error on r/{sub}: {e}")
-
-def check_google_news():
-    print("🔍 Searching Google News RSS...")
-    queries = ["looking+for+web+designer", "small+business+needs+website"]
-    
-    for query in queries:
-        url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
-        try:
-            res = requests.get(url)
-            if res.status_code == 200:
-                root = ET.fromstring(res.content)
-                for item in root.findall('./channel/item')[:2]:
-                    title = item.find('title').text
-                    link = item.find('link').text
-                    
-                    if link not in seen_ids:
-                        seen_ids.add(link)
-                        prompt = f"Draft a 2-sentence cold pitch offering web development services based on this title: '{title}'"
-                        response = ai_client.models.generate_content(
-                            model='gemini-3.6-flash',
-                            contents=prompt
-                        )
-                        send_discord_alert("Google News", title, link, response.text)
-        except Exception as e:
-            print(f"Google News error: {e}")
-
-def check_hacker_news():
-    print("🔍 Searching Hacker News Freelance threads...")
-    try:
-        url = "https://hacker-news.firebaseio.com/v0/topstories.json"
-        res = requests.get(url)
-        if res.status_code == 200:
-            story_ids = res.json()[:15]
-            for s_id in story_ids:
-                item_res = requests.get(f"https://hacker-news.firebaseio.com/v0/item/{s_id}.json")
-                if item_res.status_code == 200:
-                    data = item_res.json()
-                    title = data.get("title", "")
-                    
-                    if "Ask HN:" in title or "Seeking" in title:
-                        if s_id not in seen_ids:
-                            seen_ids.add(s_id)
-                            hn_url = f"https://news.ycombinator.com/item?id={s_id}"
-                            prompt = f"Write a professional 2-sentence pitch offering web engineering for this HN thread: '{title}'"
-                            response = ai_client.models.generate_content(
-                                model='gemini-3.6-flash',
-                                contents=prompt
-                            )
-                            send_discord_alert("HackerNews", title, hn_url, response.text)
-    except Exception as e:
-        print(f"HN error: {e}")
+                print(f"Error fetching r/{sub}: {e}")
 
 if __name__ == "__main__":
-    print("🚀 Running Lead Hunter Engine...")
-    check_reddit()
-    check_google_news()
-    check_hacker_news()
+    hunt_clients()
