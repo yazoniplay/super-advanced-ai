@@ -5,8 +5,8 @@ import json
 import logging
 import re
 import random
-import time
 from datetime import datetime
+import urllib.parse
 from google import genai
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -14,28 +14,34 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-# --- CUSTOM OFFER INSTRUCTIONS FOR GEMINI ---
 CUSTOM_OFFER_INSTRUCTIONS = """
-- PRIMARY FOCUS (CLIENT LEADS): Promote custom web development, custom sites, and server setups. Always include portfolio link: https://yazoniplay.is-a.dev
-- SECONDARY FOCUS (PLAYER LEADS): Invite active Minecraft players to join 'Skyfall SMP'.
+- PRIMARY FOCUS (CLIENT LEADS): Promote custom web development, custom sites, landing pages, and server setups. Emphasize fast, modern deployment. Always include portfolio link: https://yazoniplay.is-a.dev
+- SECONDARY FOCUS (PLAYER LEADS): Invite active Minecraft players to join 'Skyfall SMP'. Mention intense PvP, Lifesteal mechanics, or custom experiences if relevant to their post.
 - MANDATORY PREFIX: Every pitch MUST start with 'LEAD: '.
 """
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-# Concurrency lock to prevent parallel spamming of Gemini API and tripping 429 limits
-ai_semaphore = asyncio.Semaphore(1)
+# Enterprise async scaling: decoupled queue system
+ai_semaphore = asyncio.Semaphore(2) # Safely bumped to 2 for Flash-Lite
+lead_queue = asyncio.Queue()
 
 CACHE_FILE = "seen_leads.json"
 HISTORY_FILE = "lead_history.json"
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
+]
 
 def load_seen_ids():
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r") as f:
                 return set(json.load(f))
-        except Exception as e:
-            logging.error(f"Failed to load cache: {e}")
+        except Exception:
             return set()
     return set()
 
@@ -46,109 +52,76 @@ def save_seen_ids(seen_set):
     except Exception as e:
         logging.error(f"Failed to save cache: {e}")
 
-def log_lead_to_history(lead_data):
-    try:
-        history = []
-        if os.path.exists(HISTORY_FILE):
-            with open(HISTORY_FILE, "r") as f:
-                history = json.load(f)
-        
-        history.insert(0, lead_data) # Add newest to the top
-        
-        # Keep only the last 100 leads to save space
-        if len(history) > 100:
-            history = history[:100]
-
-        with open(HISTORY_FILE, "w") as f:
-            json.dump(history, f, indent=4)
-    except Exception as e:
-        logging.error(f"Failed to save lead to history file: {e}")
-
 seen_ids = load_seen_ids()
 
+# Expanded targets for maximum lead flow
 REDDIT_SUBREDDITS = [
-    "forhire", "freelance_forhire", "design_jobs", "webdev", "Wordpress",
-    "MinecraftServer", "MinecraftBuddies", "mcserver", "smp", "MinecraftLFG", "LFG", "mcstaff", "admincraft"
+    "forhire", "freelance_forhire", "design_jobs", "webdev", "Wordpress", "slavelabour",
+    "startups", "smallbusiness", "Entrepreneur",
+    "MinecraftServer", "MinecraftBuddies", "mcserver", "smp", "MinecraftLFG", "admincraft"
 ]
 
 LEMMY_COMMUNITIES = [
-    "freelance@lemmy.world", "webdev@lemmy.world", "minecraft@lemmy.world", "mcservers@feddit.uk"
+    "freelance@lemmy.world", "webdev@lemmy.world", "minecraft@lemmy.world", "mcservers@feddit.uk",
+    "technology@lemmy.world", "smallbusiness@lemmy.world"
 ]
 
+# Advanced Google Dorks routed through DuckDuckGo HTML
 SOCIAL_SEARCH_QUERIES = [
     'site:instagram.com "need a website built"',
     'site:instagram.com "hiring web developer"',
     'site:facebook.com/groups "hiring web developer"',
-    'site:facebook.com/groups "need web designer"',
     'site:tiktok.com "need a web developer"',
+    'site:twitter.com "looking for a web developer"',
+    'site:twitter.com "need a frontend dev"',
     'site:instagram.com "looking for smp"',
-    'site:tiktok.com "looking for an smp to join"'
+    'site:tiktok.com "looking for an smp to join"',
+    'site:twitter.com "any good minecraft smps"'
 ]
 
-YOUTUBE_SEARCH_QUERIES = [
-    'site:youtube.com "looking for web developer"',
-    'site:youtube.com "hiring web designer"',
-    'site:youtube.com "need website for business"',
-    'site:youtube.com "looking for smp to join"'
-]
+WEB_KEYWORDS = ["hiring web", "need a website", "looking for web developer", "website designer", "need a dev", "build me a site", "wordpress", "custom site", "hiring dev", "landing page", "frontend dev"]
+SMP_KEYWORDS = ["looking for smp", "looking for a server", "smp to join", "need an smp", "vanilla smp", "lifesteal smp", "pvp smp", "crystal pvp", "looking for players"]
+ALL_KEYWORDS = WEB_KEYWORDS + SMP_KEYWORDS
 
-KEYWORDS = [
-    "hiring web", "need a website", "looking for web developer", "website designer", 
-    "need a dev", "build me a site", "wordpress", "custom site", "hiring dev", "web design",
-    "looking for smp", "looking for a server", "looking for server", "smp to join", 
-    "need an smp", "vanilla smp", "lifesteal smp", "pvp smp"
-]
+def get_headers():
+    return {"User-Agent": random.choice(USER_AGENTS)}
 
 async def analyze_with_gemini(title, body):
     if not ai_client:
-        return {
-            "category": "CLIENT", 
-            "score": 6, 
-            "estimated_value": "N/A (AI Offline)", 
-            "pitch": "LEAD: Saw your post! I build fast, custom websites—check out my work at https://yazoniplay.is-a.dev!",
-            "ai_failed": True
-        }
+        return {"category": "CLIENT", "score": 6, "estimated_value": "N/A", "pitch": "LEAD: AI Offline - Check manually.", "ai_failed": True}
 
     prompt = f"""
     You are an elite Growth Engine for a Web Development Agency & Skyfall SMP.
-    Web Development is the MAIN BUSINESS.
+    Web Development is the MAIN BUSINESS. Find high-value clients.
 
     Analyze this post:
-    Title/Text: "{title}"
+    Title: "{title}"
     Body: "{body}"
 
     Determine Category:
-    - "CLIENT": Looking for web development, custom sites, design, or technical setups. (PRIMARY)
-    - "PLAYER": Looking for a Minecraft SMP/server to join and play.
+    - "CLIENT": Looking for web development, design, portfolio sites, or server configs. (PRIMARY)
+    - "PLAYER": Looking for a Minecraft SMP/server.
 
     Specific Pitch Guidelines:
     {CUSTOM_OFFER_INSTRUCTIONS}
 
     Tasks:
-    1. Score high intent (1-10). (10 = ready to hire or join RIGHT NOW).
+    1. Score high intent (1-10). (10 = ready to hire/join RIGHT NOW).
     2. Estimate value range: e.g., "$150 - $600" for web clients, "Active Player" for players.
     3. Generate a killer 2-sentence pitch tailored directly to their post.
     IMPORTANT: You MUST start the pitch with the exact text "LEAD: ".
 
     Respond STRICTLY in JSON format:
-    {{
-        "category": "CLIENT",
-        "score": 9,
-        "estimated_value": "$200 - $500",
-        "pitch": "LEAD: Hey! I build fast, tailored websites that drive real growth. Take a look at my portfolio at https://yazoniplay.is-a.dev — open to a quick chat?"
-    }}
+    {{"category": "CLIENT", "score": 9, "estimated_value": "$200 - $500", "pitch": "LEAD: Hey! I build fast, tailored websites that drive real growth..."}}
     """
 
-    # Using the correct 3.5-flash-lite model ID first
     fallback_models = ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.1-pro']
-    base_delay = 6
-
+    
     async with ai_semaphore:
         for model_name in fallback_models:
             for attempt in range(1, 3):
                 try:
-                    await asyncio.sleep(2.5)
-                    
+                    await asyncio.sleep(1.5) # Slight delay to keep APIs happy
                     response = ai_client.models.generate_content(
                         model=model_name,
                         contents=prompt,
@@ -160,61 +133,49 @@ async def analyze_with_gemini(title, body):
                         data["ai_failed"] = False
                         return data
                 except Exception as e:
-                    error_str = str(e)
-                    if "429" in error_str or "503" in error_str or "ResourceExhausted" in error_str:
-                        sleep_time = (base_delay ** attempt) + random.uniform(2, 4)
-                        logging.warning(f"⚠️ Rate limit hit on {model_name}. Backing off for {sleep_time:.1f}s...")
-                        await asyncio.sleep(sleep_time)
+                    if "429" in str(e) or "503" in str(e):
+                        await asyncio.sleep((4 ** attempt) + random.uniform(1, 3))
                     else:
                         break
-
-    return {
-        "category": "CLIENT", 
-        "score": 6, 
-        "estimated_value": "N/A (AI Busy)", 
-        "pitch": "LEAD: Saw your post! Check out my web dev portfolio here: https://yazoniplay.is-a.dev",
-        "ai_failed": True
-    }
+    return {"category": "CLIENT", "score": 5, "estimated_value": "N/A", "pitch": "LEAD: Saw your post! Check out my web dev portfolio here: https://yazoniplay.is-a.dev", "ai_failed": True}
 
 async def process_found_lead(session, platform, origin, title, permalink, author, analysis):
     category = analysis.get("category", "CLIENT")
     score = analysis.get("score", 5)
     est_val = analysis.get("estimated_value", "N/A")
     pitch = analysis.get("pitch", "")
-    ai_failed = analysis.get("ai_failed", False)
-
+    
     if not pitch.startswith("LEAD:"):
         pitch = f"LEAD: {pitch}"
 
-    log_lead_to_history({
-        "timestamp": datetime.utcnow().isoformat(),
-        "platform": platform,
-        "origin": origin,
-        "title": title,
-        "permalink": permalink,
-        "author": author,
-        "category": category,
-        "score": score,
-        "estimated_value": est_val,
-        "pitch": pitch
-    })
+    lead_data = {
+        "timestamp": datetime.utcnow().isoformat(), "platform": platform, "origin": origin,
+        "title": title, "permalink": permalink, "author": author, "category": category,
+        "score": score, "estimated_value": est_val, "pitch": pitch
+    }
 
-    if not DISCORD_WEBHOOK_URL:
-        return
+    try:
+        history = []
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, "r") as f:
+                history = json.load(f)
+        history.insert(0, lead_data)
+        with open(HISTORY_FILE, "w") as f:
+            json.dump(history[:200], f, indent=4) # Expanded history to 200
+    except Exception:
+        pass
 
-    if ai_failed:
-        color = 0xE67E22
-        header = f"⚠️ [GEMINI OFFLINE / FALLBACK LEAD] • {platform}"
-    else:
-        color = 0x9B59B6 if category == "CLIENT" else (0x2ECC71 if score >= 8 else 0xF1C40F)
-        header = f"💼 [PRIMARY CLIENT LEAD] • {platform}" if category == "CLIENT" else f"🎮 [SKYFALL SMP PLAYER] • {platform}"
+    if not DISCORD_WEBHOOK_URL: return
 
+    color = 0x9B59B6 if category == "CLIENT" else (0x2ECC71 if score >= 8 else 0xF1C40F)
+    header = f"💼 [CLIENT LEAD] • {platform}" if category == "CLIENT" else f"🎮 [PLAYER] • {platform}"
+    
     payload = {
-        "username": "Web Dev & Skyfall Growth Engine v7.2",
+        "username": "Web Dev & Skyfall Growth Engine v8.0",
         "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
         "embeds": [{
             "title": f"{header} ({origin})",
-            "description": f"**Title:** [{title[:100]}]({permalink})\n**User/Channel:** `{author}`",
+            "description": f"**Title:** [{title[:150]}]({permalink})\n**Author:** `{author}`",
             "url": permalink,
             "color": color,
             "fields": [
@@ -222,184 +183,121 @@ async def process_found_lead(session, platform, origin, title, permalink, author
                 {"name": "💰 Est. Value", "value": f"**{est_val}**", "inline": True},
                 {"name": "🚀 Custom Pitch", "value": f"```{pitch}```"},
             ],
-            "footer": {"text": "Agency & SMP Growth Engine v7.2 • Auto-Logged to lead_history.json"}
+            "footer": {"text": "v8.0 Deep Search Engine • Auto-Logged"}
         }]
     }
-
     try:
-        async with session.post(DISCORD_WEBHOOK_URL, json=payload) as resp:
-            if resp.status not in (200, 204):
-                logging.error(f"Discord Webhook status: {resp.status}")
+        await session.post(DISCORD_WEBHOOK_URL, json=payload)
     except Exception as e:
         logging.error(f"Discord Webhook Error: {e}")
 
-async def send_startup_notification(session):
-    if not DISCORD_WEBHOOK_URL:
-        return
+# --- WORKER QUEUE ---
+async def ai_worker(session):
+    """Pulls leads from the queue and processes them sequentially to avoid rate limits."""
+    while True:
+        lead = await lead_queue.get()
+        platform, origin, title, body, permalink, author = lead
+        
+        analysis = await analyze_with_gemini(title, body)
+        if analysis.get("score", 0) >= 6 or analysis.get("ai_failed"):
+            await process_found_lead(session, platform, origin, title, permalink, author, analysis)
+        
+        lead_queue.task_done()
 
-    payload = {
-        "username": "Web Dev & Skyfall Growth Engine Status",
-        "avatar_url": "https://i.imgur.com/8Np8Z9Y.png",
-        "embeds": [{
-            "title": "🟢 [GROWTH ENGINE CYCLE STARTED v7.2]",
-            "description": "10-minute automated loop running. Scrapers active, concurrency queue enabled.",
-            "color": 0x2ECC71,
-            "fields": [
-                {"name": "🤖 AI Engine Status", "value": "Operational (Flash-Lite Queued)", "inline": True},
-                {"name": "📁 Local Auto-Logging", "value": "Enabled (`lead_history.json`)", "inline": True},
-            ],
-            "footer": {"text": "Agency & SMP Growth Engine v7.2 • yazoniplay.is-a.dev"}
-        }]
-    }
+# --- SCRAPERS ---
+async def fetch_reddit_deep(session, sub):
+    """Fetches 'new' posts instead of hot, PLUS historical search for older missed leads."""
+    
+    # 1. Fetch live new posts
+    urls = [f"https://www.reddit.com/r/{sub}/new.json?limit=30"]
+    
+    # 2. Fetch older unfulfilled posts (Last 30 days and 1 year)
+    queries = ["hiring web", "need website", "looking for smp"]
+    for q in queries:
+        safe_q = urllib.parse.quote(q)
+        urls.append(f"https://www.reddit.com/r/{sub}/search.json?q={safe_q}&sort=new&restrict_sr=on&t=month&limit=20")
 
-    try:
-        async with session.post(DISCORD_WEBHOOK_URL, json=payload) as resp:
-            if resp.status not in (200, 204):
-                logging.error(f"Discord Startup Webhook status: {resp.status}")
-    except Exception as e:
-        logging.error(f"Discord Startup Webhook Error: {e}")
+    for url in urls:
+        try:
+            async with session.get(url, headers=get_headers()) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    for post in data.get("data", {}).get("children", []):
+                        p_data = post.get("data", {})
+                        post_id = f"reddit_{p_data.get('id')}"
+                        title = p_data.get("title", "") or ""
+                        body = p_data.get("selftext", "") or ""
+                        combined = f"{title} {body}".lower()
 
-async def fetch_reddit(session, sub):
-    url = f"https://www.reddit.com/r/{sub}/hot.json?limit=20"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ScaleEngine/7.2"}
-
-    try:
-        async with session.get(url, headers=headers) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                posts = data.get("data", {}).get("children", [])
-
-                for post in posts:
-                    p_data = post.get("data", {})
-                    post_id = f"reddit_{p_data.get('id')}"
-                    title = p_data.get("title", "") or ""
-                    body = p_data.get("selftext", "") or ""
-                    author = f"u/{p_data.get('author', 'Unknown')}"
-                    combined = f"{title} {body}".lower()
-
-                    if any(kw in combined for kw in KEYWORDS):
-                        if post_id not in seen_ids:
-                            seen_ids.add(post_id)
-                            permalink = f"https://reddit.com{p_data.get('permalink')}"
-                            analysis = await analyze_with_gemini(title, body)
-                            if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
-                                await process_found_lead(
-                                    session, "Reddit", f"r/{sub}", title, permalink, author, analysis
-                                )
-    except Exception as e:
-        logging.error(f"Error scraping Reddit r/{sub}: {e}")
+                        if any(kw in combined for kw in ALL_KEYWORDS):
+                            if post_id not in seen_ids:
+                                seen_ids.add(post_id)
+                                permalink = f"https://reddit.com{p_data.get('permalink')}"
+                                author = f"u/{p_data.get('author', 'Unknown')}"
+                                await lead_queue.put(("Reddit", f"r/{sub}", title, body, permalink, author))
+        except Exception as e:
+            logging.error(f"Error scraping Reddit {sub}: {e}")
 
 async def fetch_lemmy(session, community):
-    url = f"https://lemmy.world/api/v3/post/list?community_name={community.split('@')[0]}&limit=15&sort=Active"
-    headers = {"User-Agent": "ScaleEngine/7.2"}
-
+    url = f"https://lemmy.world/api/v3/post/list?community_name={community.split('@')[0]}&limit=30&sort=New"
     try:
-        async with session.get(url, headers=headers) as resp:
+        async with session.get(url, headers=get_headers()) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                posts = data.get("posts", [])
-
-                for item in posts:
-                    post = item.get("post", {})
-                    creator = item.get("creator", {})
+                for item in data.get("posts", []):
+                    post, creator = item.get("post", {}), item.get("creator", {})
                     post_id = f"lemmy_{post.get('id')}"
-                    title = post.get("name", "") or ""
-                    body = post.get("body", "") or ""
-                    author = f"@{creator.get('name', 'Unknown')}"
-                    combined = f"{title} {body}".lower()
-
-                    if any(kw in combined for kw in KEYWORDS):
+                    title, body = post.get("name", "") or "", post.get("body", "") or ""
+                    
+                    if any(kw in f"{title} {body}".lower() for kw in ALL_KEYWORDS):
                         if post_id not in seen_ids:
                             seen_ids.add(post_id)
-                            permalink = post.get("ap_id", "")
-                            analysis = await analyze_with_gemini(title, body)
-                            if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
-                                await process_found_lead(
-                                    session, "Lemmy", community, title, permalink, author, analysis
-                                )
-    except Exception as e:
-        logging.error(f"Error scraping Lemmy {community}: {e}")
+                            await lead_queue.put(("Lemmy", community, title, body, post.get("ap_id", ""), f"@{creator.get('name', 'Unknown')}"))
+    except Exception:
+        pass
 
 async def fetch_social_search(session, query):
     url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-
     try:
-        async with session.get(url, headers=headers) as resp:
+        async with session.get(url, headers=get_headers()) as resp:
             if resp.status == 200:
                 html = await resp.text()
-                platform = "Instagram" if "instagram" in query else ("Facebook" if "facebook" in query else "TikTok")
-                
+                platform = "Twitter" if "twitter" in query else ("Instagram" if "instagram" in query else "TikTok")
                 raw_snippets = re.findall(r'class="result__snippet[^">]*">(.*?)</a>', html, re.DOTALL)
-                for snippet in raw_snippets[:4]:
+                
+                for snippet in raw_snippets[:10]: # Look deeper into search pages
                     clean_text = re.sub(r'<[^>]+>', '', snippet).strip()
-                    if not clean_text:
-                        continue
-
+                    if not clean_text: continue
                     post_id = f"{platform.lower()}_{hash(clean_text)}"
                     
-                    if any(kw in clean_text.lower() for kw in KEYWORDS):
+                    if any(kw in clean_text.lower() for kw in ALL_KEYWORDS):
                         if post_id not in seen_ids:
                             seen_ids.add(post_id)
-                            analysis = await analyze_with_gemini(clean_text, "")
-                            if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
-                                await process_found_lead(
-                                    session, platform, "Social Index", clean_text[:80] + "...", 
-                                    f"https://www.google.com/search?q={query.replace(' ', '+')}", 
-                                    f"{platform} User", analysis
-                                )
-    except Exception as e:
-        logging.error(f"Error searching {query}: {e}")
-
-async def fetch_youtube(session, query):
-    url = f"https://html.duckduckgo.com/html/?q={query.replace(' ', '+')}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-
-    try:
-        async with session.get(url, headers=headers) as resp:
-            if resp.status == 200:
-                html = await resp.text()
-                raw_snippets = re.findall(r'class="result__snippet[^">]*">(.*?)</a>', html, re.DOTALL)
-                
-                for snippet in raw_snippets[:5]:
-                    clean_text = re.sub(r'<[^>]+>', '', snippet).strip()
-                    if not clean_text:
-                        continue
-
-                    post_id = f"youtube_{hash(clean_text)}"
-
-                    if any(kw in clean_text.lower() for kw in KEYWORDS):
-                        if post_id not in seen_ids:
-                            seen_ids.add(post_id)
-                            analysis = await analyze_with_gemini(clean_text, "YouTube Content")
-                            if analysis.get("score", 5) >= 6 or analysis.get("ai_failed"):
-                                await process_found_lead(
-                                    session, "YouTube", "Search Index", clean_text[:80] + "...",
-                                    f"https://www.youtube.com/results?search_query={query.replace('site:youtube.com ', '').replace(' ', '+')}",
-                                    "YouTube Creator", analysis
-                                )
-    except Exception as e:
-        logging.error(f"Error searching YouTube for {query}: {e}")
+                            search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+                            await lead_queue.put((platform, "Deep Search Index", clean_text[:100] + "...", "", search_url, f"{platform} User"))
+    except Exception:
+        pass
 
 async def main():
-    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v7.2...")
-    while True:
-        async with aiohttp.ClientSession() as session:
-            await send_startup_notification(session)
-            
-            await asyncio.sleep(3)
-
-            reddit_tasks = [fetch_reddit(session, sub) for sub in REDDIT_SUBREDDITS]
-            lemmy_tasks = [fetch_lemmy(session, comm) for comm in LEMMY_COMMUNITIES]
-            social_tasks = [fetch_social_search(session, q) for q in SOCIAL_SEARCH_QUERIES]
-            youtube_tasks = [fetch_youtube(session, yq) for yq in YOUTUBE_SEARCH_QUERIES]
-            
-            await asyncio.gather(*reddit_tasks, *lemmy_tasks, *social_tasks, *youtube_tasks)
+    logging.info("🚀 Launching Web Dev Agency & Skyfall SMP Growth Engine v8.0...")
+    
+    async with aiohttp.ClientSession() as session:
+        # Start AI Background Worker
+        worker_task = asyncio.create_task(ai_worker(session))
         
-        save_seen_ids(seen_ids)
-        
-        logging.info("⏳ Cycle complete. Waiting 10 minutes before next scan...")
-        await asyncio.sleep(600)
+        while True:
+            logging.info("🕸️ Scrapers firing: Digging for new and historical leads...")
+            
+            tasks = []
+            tasks.extend([fetch_reddit_deep(session, sub) for sub in REDDIT_SUBREDDITS])
+            tasks.extend([fetch_lemmy(session, comm) for comm in LEMMY_COMMUNITIES])
+            tasks.extend([fetch_social_search(session, q) for q in SOCIAL_SEARCH_QUERIES])
+            
+            await asyncio.gather(*tasks)
+            save_seen_ids(seen_ids)
+            
+            logging.info(f"⏳ Scraping cycle complete. {lead_queue.qsize()} leads currently in AI processing queue. Sleeping 5 mins...")
+            await asyncio.sleep(300) # Scan more aggressively (5 mins instead of 10)
 
 if __name__ == "__main__":
     asyncio.run(main())
